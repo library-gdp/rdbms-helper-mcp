@@ -1,0 +1,29 @@
+---
+title: company
+---
+erDiagram
+    %% 사내 시스템 ERD
+    DEPARTMENT ||--o{ EMPLOYEE : "has"
+    EMPLOYEE }o..o| EMPLOYEE : manages
+    EMPLOYEE ||--|{ EMPLOYEE_PROJECT : assigned
+    PROJECT ||--|{ EMPLOYEE_PROJECT : staffed
+    EMPLOYEE ||--o| PARKING_PERMIT : holds
+    DEPARTMENT {
+        bigint id PK
+        varchar(100) name UK "부서명"
+    }
+    EMPLOYEE["직원"] {
+        bigint id PK
+        varchar(50) name
+        bigint department_id FK
+        bigint manager_id FK "상사"
+    }
+    PROJECT { bigint id PK }
+    EMPLOYEE_PROJECT {
+        bigint employee_id PK, FK
+        bigint project_id PK, FK
+    }
+    PARKING_PERMIT {
+        bigint id PK
+        bigint employee_id FK
+    }
