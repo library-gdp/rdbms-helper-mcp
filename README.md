@@ -212,16 +212,23 @@ local scope(`~/.claude.json`, 개인·현재 프로젝트)와 user scope(`~/.cla
 
 에이전트가 다음을 하지 못하도록 각 에이전트의 **tool permission deny rule**로 막는다.
 
-1. 보호 브랜치에 직접 push — 기본값 `dev`, `qa`, `prod`, `main`, `release`
-2. PR merge
+1. 보호 브랜치에 직접 push — 기본값 `main`, `prod`, `qa`, `stg`, `dev`, `develop`
+2. PR merge (모든 브랜치)
+3. 이력 재작성 — `git commit --amend`, force push(`-f`, `--force`, `--force-with-lease`,
+   `--force-if-includes`, `+<refspec>`)
+4. 에이전트 설정 파일 수정 — 아래 [설정 파일 잠금](#설정-파일-잠금)
 
 deny rule은 모델의 판단과 무관하게 harness가 명령을 실행하기 전에 패턴으로 차단하므로
 결정론적이다. Claude Code에서는 `bypassPermissions`·`auto` 모드에서도 적용된다.
+
+그 밖의 commit·push는 허용한다. Claude Code에는 `git add *`, `git commit *`, `git push *`
+allow rule을 함께 넣어 확인 없이 실행되게 한다. 같은 명령이 deny rule에도 걸리면 deny가 이긴다.
 
 ### 보호 브랜치 변경
 
 정본은 `.agent/guardrails/protected-branches`(한 줄에 하나, `#` 주석)다. 수정 후 생성
 스크립트를 실행하고 결과 파일을 함께 커밋한다. Windows에서는 Git Bash로 실행한다.
+에이전트는 이 파일과 생성 스크립트를 수정·실행할 수 없으므로 사람이 직접 한다.
 
 ```bash
 ./script/generate-guardrails.sh
@@ -241,10 +248,32 @@ deny rule은 모델의 판단과 무관하게 harness가 명령을 실행하기 
 | `gh pr merge`, `glab mr merge` | O | O | O |
 | `gh api`의 PR merge REST·GraphQL (`pulls/*/merge`, `mergePullRequest`, `enablePullRequestAutoMerge`) | O | O | X |
 | MCP의 PR merge tool (`mcp__*__*merge_pull_request*`, `mcp__*__*auto_merge*`) | O | X | X |
+| force push: `--force*`, `-f`(단독 또는 `-uf`·`-fu` 등 `u`·`v`·`q`·`n`과 묶은 형태), `+<refspec>` | O | O | `-f`류·`--force`·`--force-with-lease`·`--force-if-includes`가 `git push` 뒤 3 token 안에 있을 때만 O |
+| `gh api …force=true…` (ref 강제 갱신) | O | O | X |
+| `git commit --amend` (`--am`까지의 약어 포함, `-C`·`-c` 형태 포함) | O | O | `--amend`가 `git commit` 뒤 3 token 안에 있을 때만 O (`-m <msg>` 뒤는 X) |
+| 설정 파일 수정 (아래 표) | O | 셸 명령만 O | X |
 
 대상 브랜치가 명령에 드러나지 않는 push는 현재 브랜치에 따라 보호 브랜치로 갈 수 있지만
 패턴으로는 현재 브랜치를 알 수 없다. 그래서 Claude Code·opencode에서는 이런 push를 모두
 막고, push는 `git push -u origin <feature-branch>`처럼 대상을 명시하게 한다.
+
+### 설정 파일 잠금
+
+에이전트는 자기 permission을 정하는 파일을 수정할 수 없다. 이 잠금을 바꾸려면 사람이
+생성 스크립트를 고치고 실행해 결과를 커밋한다.
+
+| 대상 | Claude Code 파일 tool (`Edit`·`Write`·`NotebookEdit`) | 셸 명령 (Claude Code `Bash`·`PowerShell`, opencode `bash`) |
+|---|---|---|
+| guardrail 정본·생성 파일: `.agent/guardrails/**`, 생성 스크립트 `script/generate-guardrails.sh` | deny | 경로·파일 이름(`protected-branches`, `claude-settings.json`, `codex.rules`, `generate-guardrails`)을 담은 명령 deny |
+| Claude Code: `.claude/settings.json`, `.claude/settings.local.json`, `~/.claude/settings*.json`, `~/.claude.json`, `/etc/claude-code/**` | deny | `.claude/settings`, `.claude.json`, `managed-settings`를 담은 명령 deny |
+| opencode: `opencode.json(c)`, `.opencode/opencode.json(c)`, `~/.config/opencode/**` | deny | `opencode.json`, `.config/opencode`를 담은 명령 deny |
+| Codex: `.codex/**`, `~/.codex/**` | deny | `.codex`를 담은 명령 deny |
+
+- 셸 명령은 문자열 패턴으로만 판정하므로 읽기 명령(`cat`, `grep`, `git diff -- <경로>`)도 막힌다.
+  내용 확인은 Read tool로 한다.
+- commit 메시지·PR 본문에 위 경로를 쓰려면 `git commit -F <file>`, `gh pr create --body-file <file>`
+  처럼 파일로 넘긴다. 명령 문자열에 경로가 들어가면 막힌다.
+- `.agent/mcp.json`, `.agent/skills/`, `.agent/commands/`는 잠그지 않는다.
 
 ### 한계
 
@@ -253,8 +282,12 @@ permission rule은 에이전트가 쓴 **명령 문자열**을 매칭하므로 �
 
 - `sh -c '…'`, `/usr/bin/git push …`, 스크립트·Makefile·git alias 안에서의 push
 - 따옴표로 감싼 브랜치 이름(`git push origin "main"`), `origin` 외 remote 이름만 쓴 push
+- 위에 없는 short flag 묶음의 force push(`-fd` 등), `git reset --soft HEAD~1` 뒤 다시 commit하는
+  사실상의 amend, `git rebase`
+- 설정 파일: 경로를 나눠 쓴 명령(`cd .agent && … guardrails/…`), 경로를 명령 밖에서 만드는
+  스크립트·인터프리터, `git checkout`·`git merge`처럼 다른 커밋의 내용으로 파일을 바꾸는 명령
 - Codex: 위 표에서 X인 항목. prefix rule은 literal token prefix만 매칭하고 명령의 끝을 지정할 수 없다
-- opencode: MCP tool 호출
+- opencode: MCP tool 호출, 파일 편집 tool
 
 실제 보호는 원격 저장소의 branch protection / ruleset(직접 push 금지, PR 필수)으로 보장하고,
 이 guardrail은 에이전트가 그 이전에 멈추도록 하는 1차 방어선으로 쓴다.
@@ -262,8 +295,9 @@ permission rule은 에이전트가 쓴 **명령 문자열**을 매칭하므로 �
 ### 에이전트별 주의
 
 - **Claude Code** — `.claude/settings.json`은 생성 파일로 가는 링크다. 개인 permission은
-  `.claude/settings.local.json`에 둔다. `/permissions`에서 project 설정에 rule을 추가하면 링크를
-  따라 생성 파일이 바뀌고 다음 생성 때 사라진다.
+  `.claude/settings.local.json`에 둔다(에이전트는 수정할 수 없으므로 사람이 편집한다).
+  `/permissions`에서 project 설정에 rule을 추가하면 링크를 따라 생성 파일이 바뀌고 다음 생성 때
+  사라진다.
 - **opencode** — 마지막으로 매칭된 rule이 이긴다. 다른 설정에서 더 넓은 `allow`를 이 rule들보다
   뒤에 추가하면 deny가 무력화된다.
 - **Codex** — project의 `.codex/` layer는 **신뢰된 프로젝트**에서만 로드된다. 처음 실행할 때

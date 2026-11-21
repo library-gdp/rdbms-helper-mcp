@@ -15,9 +15,17 @@
 #      cannot be read from the command itself (bare `git push`, `HEAD`,
 #      `--all`, ...), since such a push may land on a protected branch.
 #   2. No pull request merge.
+#   3. No history rewrite: no `git commit --amend` and no force push
+#      (`-f`, `--force*`, `+<refspec>`).
+#   4. No change to agent settings files: the guardrail files, this script,
+#      Claude Code / opencode / Codex settings. Claude Code denies file tools
+#      on those paths; Claude Code and opencode deny any shell command that
+#      names them.
 #
-# Every rule is a deny rule, so it applies in every permission mode, including
-# Claude Code's bypassPermissions and auto modes.
+# Rules 1-4 are deny rules, so they apply in every permission mode, including
+# Claude Code's bypassPermissions and auto modes. Claude Code also gets allow
+# rules for `git add`, `git commit` and `git push`, so other commits and pushes
+# run without a prompt; a deny rule still wins over them.
 #
 # Usage: script/generate-guardrails.sh   (runnable from any working directory)
 # On Windows, run it from Git Bash.
@@ -66,9 +74,14 @@ fi
 
 # `git -C <dir> push` and `git -c <k>=<v> push` are the same push.
 push_prefixes=('git push' 'git -C * push' 'git -c * push')
+commit_prefixes=('git commit' 'git -C * commit' 'git -c * commit')
+
+# Short-flag spellings of a force push: `-f` alone or bundled with one of the
+# other flag-only short options (-u, -v, -q, -n).
+force_short_flags=(-f -fu -uf -fv -vf -fq -qf -fn -nf)
 
 shell_patterns() {
-  local p b
+  local p b f
 
   for p in "${push_prefixes[@]}"; do
     # Target branch is spelled out: <b>, +<b>, <src>:<b>, :<b>, refs/heads/<b>.
@@ -88,13 +101,26 @@ shell_patterns() {
       "$p * +HEAD" "$p * +HEAD *" \
       "$p * @" "$p * @ *" \
       "$p *--all*" "$p *--branches*" "$p *--mirror*"
+
+    # Force push to any branch: --force, --force-with-lease, --force-if-includes,
+    # -f (alone or bundled), and a `+<refspec>`.
+    printf '%s\n' "$p *--force*" "$p +*" "$p * +*"
+    for f in "${force_short_flags[@]}"; do
+      printf '%s\n' "$p $f" "$p $f *" "$p * $f" "$p * $f *"
+    done
+  done
+
+  # Amending a commit. git accepts any unambiguous prefix of a long option,
+  # and `--am` is the shortest prefix of `--amend`.
+  for p in "${commit_prefixes[@]}"; do
+    printf '%s\n' "$p *--am*"
   done
 
   # Pushing through the GitHub API instead of git.
   for b in "${branches[@]}"; do
     printf '%s\n' "gh api *refs/heads/$b*" "gh api *branch=$b*"
   done
-  printf '%s\n' "gh api *merges*"
+  printf '%s\n' "gh api *merges*" "gh api *force=true*"
 
   # Pull request merge.
   printf '%s\n' \
@@ -106,9 +132,61 @@ shell_patterns() {
     'glab mr merge *'
 }
 
+# Shell commands that name an agent settings file, shared by Claude Code and
+# opencode. Any such command is denied, reads included, because a pattern
+# cannot tell a read from a write. Use the Read tool to look at these files.
+settings_shell_patterns() {
+  printf '%s\n' \
+    '*.agent/guardrails*' \
+    '*protected-branches*' \
+    '*claude-settings.json*' \
+    '*codex.rules*' \
+    '*generate-guardrails*' \
+    '*.claude/settings*' \
+    '*.claude.json*' \
+    '*managed-settings*' \
+    '*opencode.json*' \
+    '*.config/opencode*' \
+    '*.codex*'
+}
+
+# Agent settings files, as Claude Code file permission paths. `Edit(path)`
+# covers every file-writing tool (Edit, Write, NotebookEdit).
+#   /path    relative to the project root
+#   **/path  relative to the working directory, at any depth
+#   ~/path   relative to the home directory
+#   //path   absolute
+settings_edit_paths() {
+  local rel
+  for rel in \
+    '.agent/guardrails/**' \
+    'script/generate-guardrails.sh' \
+    '.claude/settings.json' \
+    '.claude/settings.local.json' \
+    'opencode.json' \
+    'opencode.jsonc' \
+    '.opencode/opencode.json' \
+    '.opencode/opencode.jsonc' \
+    '.codex/**'; do
+    printf '%s\n' "/$rel" "**/$rel"
+  done
+  printf '%s\n' \
+    '~/.claude/settings.json' \
+    '~/.claude/settings.local.json' \
+    '~/.claude.json' \
+    '~/.config/opencode/**' \
+    '~/.codex/**' \
+    '//etc/claude-code/**'
+}
+
 # MCP tools that merge a pull request, on any server (Claude Code only).
 mcp_patterns() {
   printf '%s\n' 'mcp__*__*merge_pull_request*' 'mcp__*__*auto_merge*'
+}
+
+# Commands Claude Code may run without a prompt. Deny rules above still win.
+allow_patterns() {
+  printf '%s\n' 'git add *' 'git commit *' 'git push *'
 }
 
 # Print lines as JSON array items: `<indent>"<prefix><line><suffix>",`
@@ -131,10 +209,17 @@ render_claude() {
   printf '{\n'
   printf '  "$schema": "https://json.schemastore.org/claude-code-settings.json",\n'
   printf '  "permissions": {\n'
+  printf '    "allow": [\n'
+  {
+    allow_patterns | sed -e 's|.*|Bash(&)|'
+    allow_patterns | sed -e 's|.*|PowerShell(&)|'
+  } | json_items '      ' '' ''
+  printf '    ],\n'
   printf '    "deny": [\n'
   {
-    shell_patterns | sed -e 's|.*|Bash(&)|'
-    shell_patterns | sed -e 's|.*|PowerShell(&)|'
+    { shell_patterns; settings_shell_patterns; } | sed -e 's|.*|Bash(&)|'
+    { shell_patterns; settings_shell_patterns; } | sed -e 's|.*|PowerShell(&)|'
+    settings_edit_paths | sed -e 's|.*|Edit(&)|'
     mcp_patterns
   } | json_items '      ' '' ''
   printf '    ]\n'
@@ -154,7 +239,7 @@ render_opencode() {
   printf '  "$schema": "https://opencode.ai/config.json",\n'
   printf '  "permission": {\n'
   printf '    "bash": {\n'
-  shell_patterns | json_items '      ' '' '": "deny'
+  { shell_patterns; settings_shell_patterns; } | json_items '      ' '' '": "deny'
   printf '    }\n'
   printf '  }\n'
   printf '}\n'
@@ -182,7 +267,7 @@ starlark_list() {
 }
 
 render_codex() {
-  local -a literal=() danger=() lead=()
+  local -a literal=() danger=() lead=() push_lead=() commit_lead=()
   local b i k pattern
 
   for b in "${branches[@]}"; do
@@ -202,6 +287,13 @@ render_codex() {
     --force-if-includes --no-verify --atomic --follow-tags --tags -d --delete
     -n --dry-run -q --quiet -v --verbose --porcelain --progress --no-progress)
 
+  # Tokens that may stand in front of a force flag or `--amend`.
+  push_lead=(origin upstream -u --set-upstream --no-verify --atomic
+    --follow-tags --tags -n --dry-run -q --quiet -v --verbose --porcelain
+    --progress --no-progress)
+  commit_lead=(-a --all --no-edit -q --quiet -v --verbose -n --no-verify
+    -s --signoff -S --reset-author --allow-empty)
+
   printf '# %s\n' "$header_note"
   printf '#\n'
   printf '# Protected branches: %s\n' "${branches[*]}"
@@ -219,6 +311,36 @@ render_codex() {
     printf '    pattern = [%s],\n' "$pattern"
     printf '    decision = "forbidden",\n'
     printf '    justification = "Direct push to a protected branch, or a push whose target branch is implicit, is forbidden. Push a feature branch by name and open a pull request.",\n'
+    printf ')\n'
+  done
+
+  # Force push: the force flag must come within the first three tokens after
+  # `git push`. A `+<refspec>` or `--force-with-lease=<ref>` is not caught.
+  for k in 0 1 2 3; do
+    pattern="\"git\", \"push\""
+    for ((i = 0; i < k; i++)); do
+      pattern+=", $(starlark_list "${push_lead[@]}")"
+    done
+    pattern+=", $(starlark_list "${force_short_flags[@]}" --force --force-with-lease --force-if-includes)"
+    printf '\nprefix_rule(\n'
+    printf '    pattern = [%s],\n' "$pattern"
+    printf '    decision = "forbidden",\n'
+    printf '    justification = "Force push rewrites remote history and is forbidden for agents. Push new commits instead.",\n'
+    printf ')\n'
+  done
+
+  # Amend: `--amend` must come within the first three tokens after
+  # `git commit`, and `-m <message>` in front of it is not caught.
+  for k in 0 1 2 3; do
+    pattern="\"git\", \"commit\""
+    for ((i = 0; i < k; i++)); do
+      pattern+=", $(starlark_list "${commit_lead[@]}")"
+    done
+    pattern+=", [\"--amend\"]"
+    printf '\nprefix_rule(\n'
+    printf '    pattern = [%s],\n' "$pattern"
+    printf '    decision = "forbidden",\n'
+    printf '    justification = "Amending a commit rewrites history and is forbidden for agents. Make a new commit instead.",\n'
     printf ')\n'
   done
 

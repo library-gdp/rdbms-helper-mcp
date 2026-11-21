@@ -6,8 +6,12 @@
 #
 # After editing, regenerate the agent permission files and commit the result:
 #   script/generate-guardrails.sh
-dev
-qa
-prod
+#
+# Agents are denied any change to this file and to the generated files, so a
+# person edits this list and runs the script.
 main
-release
+prod
+qa
+stg
+dev
+develop
