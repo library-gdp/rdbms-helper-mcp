@@ -1,0 +1,31 @@
+<mxfile host="drawio">
+  <diagram name="shop" id="p1">
+    <mxGraphModel>
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="t1" value="customer" style="shape=table;startSize=30;container=1;" vertex="1" parent="1">
+          <mxGeometry x="0" y="0" width="180" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="t1r1" value="" style="shape=tableRow;" vertex="1" parent="t1">
+          <mxGeometry y="30" width="180" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t1r1c1" value="PK" style="shape=partialRectangle;" vertex="1" parent="t1r1">
+          <mxGeometry width="30" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t1r1c2" value="id &lt;b&gt;bigint&lt;/b&gt;" style="shape=partialRectangle;" vertex="1" parent="t1r1">
+          <mxGeometry x="30" width="150" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="t2" value="&lt;div&gt;orders&lt;/div&gt;&lt;div&gt;id bigint PK&lt;/div&gt;&lt;div&gt;customer_id bigint FK&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;" vertex="1" parent="1">
+          <mxGeometry x="300" y="0" width="180" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1" style="edgeStyle=entityRelationEdgeStyle;startArrow=ERzeroToMany;endArrow=ERmandOne;dashed=1;" edge="1" parent="1" source="t2" target="t1r1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e1l" value="places" style="edgeLabel;" vertex="1" connectable="0" parent="e1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
